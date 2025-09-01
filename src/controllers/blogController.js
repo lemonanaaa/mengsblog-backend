@@ -14,7 +14,8 @@ const blogSchema = Joi.object({
   metaTitle: Joi.string().max(255).optional(),
   metaDescription: Joi.string().max(500).optional(),
   featuredImage: Joi.string().uri().optional(),
-  isFeatured: Joi.boolean().default(false)
+  isFeatured: Joi.boolean().default(false),
+  slug: Joi.string().optional()
 });
 
 // 获取所有博客
@@ -160,9 +161,19 @@ const createBlog = async (req, res) => {
       }
     }
 
+    // 如果没有提供slug，自动生成
+    if (!value.slug) {
+      const slugify = require('slugify');
+      value.slug = slugify(value.title, {
+        lower: true,
+        strict: true,
+        locale: "zh",
+      });
+      console.log('Generated slug:', value.slug);
+    }
+
     const blog = new Blog(value);
     await blog.save();
-
     // 更新标签使用次数
     if (value.tags && value.tags.length > 0) {
       for (const tagName of value.tags) {
