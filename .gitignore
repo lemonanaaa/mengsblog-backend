@@ -90,3 +90,35 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+
+# 安全相关文件
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+*.pem
+*.p12
+*.pfx
+*.crt
+*.csr
+
+# 上传的文件目录
+uploads/
+temp/
+
+# 测试文件
+test-oss.js
+src/test-oss.js
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+tmp/
+temp/
+.tmp/
+.temp/
