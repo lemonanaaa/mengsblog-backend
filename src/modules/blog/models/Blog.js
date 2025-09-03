@@ -47,7 +47,7 @@ const blogSchema = new mongoose.Schema(
     slug: {
       type: String,
       unique: true,
-      required: true,
+      required: false,  // 改为false，因为中间件会自动生成
     },
     metaTitle: {
       type: String,
@@ -137,7 +137,7 @@ blogSchema.pre("save", function (next) {
 
 // 静态方法
 blogSchema.statics.findPublished = function () {
-  return this.find({ status: "published" }).sort({ publishedAt: -1 });
+  return this.find({ status: "published" }).sort([['createdAt', -1], ['_id', -1]]);
 };
 
 blogSchema.statics.findBySlug = function (slug) {

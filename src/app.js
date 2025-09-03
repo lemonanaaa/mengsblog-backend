@@ -5,7 +5,8 @@ const morgan = require('morgan');
 require('dotenv').config();
 
 const { connectDB } = require('./config/database');
-const blogRoutes = require('./routes/blogRoutes');
+const blogModule = require('./modules/blog');
+const photoModule = require('./modules/photo');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -20,11 +21,12 @@ app.use(morgan('combined'));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// 路由 - 去掉/api前缀
-app.use('/', blogRoutes);
+// 路由 - 按模块组织
+app.use('/api', blogModule.routes);
+app.use('/api', photoModule.routes);
 
 // 健康检查
-app.get('/health', (req, res) => {
+app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'OK', 
     timestamp: new Date().toISOString(),
@@ -59,7 +61,7 @@ const startServer = async () => {
     
     app.listen(PORT, () => {
       console.log(`🚀 服务器运行在端口 ${PORT}`);
-      console.log(`📝 API文档: http://localhost:${PORT}/blog`);
+      console.log(`📝 API文档: http://localhost:${PORT}/api/blogs`);
       console.log(`🗄️ 数据库: MongoDB`);
     });
   } catch (error) {

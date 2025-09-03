@@ -28,14 +28,26 @@ const getAllBlogs = async (req, res) => {
       category, 
       search, 
       tag,
-      featured 
+      featured,
+      isMeng 
     } = req.query;
     
     const skip = (page - 1) * limit;
     
     // 构建查询条件
     const query = {};
-    if (status) query.status = status;
+    
+    // 根据isMeng参数控制返回的博客状态
+    if (isMeng === 'true') {
+      // isMeng为true时，返回所有博客（包括草稿、已发布、已归档）
+      // 不添加status筛选条件
+    } else {
+      // isMeng为false或未提供时，只返回已发布的博客
+      query.status = 'published';
+    }
+    
+    // 其他筛选条件
+    if (status) query.status = status;  // 如果明确指定了status，则覆盖默认行为
     if (category) query.category = category;
     if (featured === 'true') query.isFeatured = true;
     if (tag) query.tags = { $in: [tag] };
@@ -46,7 +58,7 @@ const getAllBlogs = async (req, res) => {
     // 执行查询
     const blogs = await Blog.find(query)
       .populate('category', 'name slug')
-      .sort({ publishedAt: -1, createdAt: -1 })
+      .sort([['createdAt', -1], ['_id', -1]])
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
