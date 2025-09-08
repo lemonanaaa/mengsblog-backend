@@ -34,9 +34,17 @@ const uploadToOSS = async (file, filename, folder = 'photos') => {
       }
     });
     
+    // 生成前端可访问的URL
+    const frontendUrl = `https://${process.env.ALIYUN_OSS_BUCKET}.${process.env.ALIYUN_OSS_ENDPOINT}/${key}`;
+    
+    // 生成缩略图URL（使用OSS图片处理服务）
+    const thumbnailUrl = `https://${process.env.ALIYUN_OSS_BUCKET}.${process.env.ALIYUN_OSS_ENDPOINT}/${key}?x-oss-process=image/resize,w_300,h_300,m_fill`;
+    
     return {
       success: true,
       url: result.url,
+      frontendUrl: frontendUrl, // 前端访问URL
+      thumbnailUrl: thumbnailUrl, // 缩略图URL
       key: key,
       size: file.size,
       mimetype: file.mimetype

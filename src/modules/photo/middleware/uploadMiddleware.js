@@ -1,7 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs').promises;
-const { uploadToOSS } = require('../../config/oss');
+const { uploadToOSS } = require('../../../config/oss');
 
 // 确保上传目录存在
 const ensureUploadDirs = async () => {
@@ -21,25 +21,8 @@ const ensureUploadDirs = async () => {
   }
 };
 
-// 配置存储
-const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
-    await ensureUploadDirs();
-    
-    // 根据文件类型选择存储目录
-    if (file.fieldname === 'retouched') {
-      cb(null, './uploads/retouched');
-    } else {
-      cb(null, './uploads/photos');
-    }
-  },
-  filename: (req, file, cb) => {
-    // 生成唯一文件名
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
-  }
-});
+// 配置内存存储，不保存到本地
+const storage = multer.memoryStorage();
 
 // 文件过滤器
 const fileFilter = (req, file, cb) => {
@@ -128,9 +111,8 @@ const getFileInfo = (req, res, next) => {
   
   // 为每个文件添加额外信息
   req.fileInfos = files.map(file => ({
-    filename: file.filename,
+    filename: file.filename || `images-${Date.now()}-${Math.round(Math.random() * 1E9)}${path.extname(file.originalname)}`,
     originalName: file.originalname,
-    filePath: file.path,
     fileSize: file.size,
     mimeType: file.mimetype,
     fieldname: file.fieldname,
@@ -139,6 +121,31 @@ const getFileInfo = (req, res, next) => {
   }));
   
   next();
+};
+
+// 添加图片尺寸信息的中间件
+const addImageDimensions = async (req, res, next) => {
+  if (!req.fileInfos || req.fileInfos.length === 0) {
+    return next();
+  }
+  
+  try {
+    // 为每个图片添加尺寸信息
+    for (const fileInfo of req.fileInfos) {
+      if (fileInfo.mimeType.startsWith('image/')) {
+        // 这里可以添加图片尺寸检测逻辑
+        // 暂时设置为默认值，后续可以通过图片处理库获取实际尺寸
+        fileInfo.width = 1920;  // 默认宽度
+        fileInfo.height = 1080; // 默认高度
+        fileInfo.aspectRatio = '16:9'; // 默认宽高比
+      }
+    }
+    
+    next();
+  } catch (error) {
+    console.error('添加图片尺寸信息失败:', error);
+    next();
+  }
 };
 
 // OSS上传中间件
@@ -151,22 +158,29 @@ const uploadToOSSMiddleware = async (req, res, next) => {
     // 上传所有文件到OSS
     const ossResults = await Promise.all(
       req.fileInfos.map(async (fileInfo) => {
+        // 由于使用memoryStorage，文件对象结构不同
         const file = req.files ? 
-          req.files.find(f => f.filename === fileInfo.filename) : 
+          req.files.find(f => f.originalname === fileInfo.originalName) : 
           req.file;
         
-        if (!file) return fileInfo;
+        if (!file) {
+          console.error('找不到匹配的文件:', fileInfo.originalName);
+          return fileInfo;
+        }
         
         // 上传到OSS
+        console.log(`开始上传文件到OSS: ${fileInfo.originalName}`);
         const ossResult = await uploadToOSS(file, fileInfo.filename);
         
         if (ossResult.success) {
           // 更新文件信息，添加OSS相关字段
           fileInfo.ossKey = ossResult.key;
-          fileInfo.ossUrl = ossResult.url;
+          fileInfo.frontendUrl = ossResult.frontendUrl; // 前端访问URL
+          fileInfo.thumbnailUrl = ossResult.thumbnailUrl; // 缩略图URL
           fileInfo.uploadedToOSS = true;
+          console.log(`✅ OSS上传成功: ${fileInfo.originalName} -> ${ossResult.key}`);
         } else {
-          console.error('OSS上传失败:', ossResult.error);
+          console.error('❌ OSS上传失败:', ossResult.error);
           fileInfo.ossError = ossResult.error;
         }
         
@@ -189,5 +203,6 @@ module.exports = {
   uploadImages,
   handleUploadError,
   getFileInfo,
+  addImageDimensions,
   uploadToOSSMiddleware
 };

@@ -5,6 +5,7 @@ const {
   uploadImages,
   handleUploadError,
   getFileInfo,
+  addImageDimensions,
   uploadToOSSMiddleware
 } = require('../middleware/uploadMiddleware');
 
@@ -25,17 +26,19 @@ router.delete('/shoot-sessions/:id', photoController.deleteShootSession);
 
 // 按拍摄批次获取图片
 router.get('/shoot-sessions/:sessionId/photos', photoController.getPhotosByShootSession);
+router.post('/shoot-sessions/:sessionId/photos', photoController.getPhotosByShootSession);
 
 // 统一的图片上传路由（支持普通图片和精修图片）
 router.post('/photos/upload', 
   uploadImages, 
   handleUploadError, 
   getFileInfo,
+  addImageDimensions,     // 添加图片尺寸信息
   uploadToOSSMiddleware,  // 添加OSS上传中间件
   photoController.uploadImages
 );
 
-// 批量删除图片
-router.delete('/photos', photoController.deletePhotos);
+// 批量删除图片 (使用POST请求，便于调试)
+router.post('/photos/delete', photoController.deletePhotos);
 
 module.exports = router;

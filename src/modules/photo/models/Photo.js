@@ -20,11 +20,7 @@ const photoSchema = new mongoose.Schema({
     required: [true, "原始文件名不能为空"]
   },
   
-  // 本地文件路径（兼容旧数据）
-  filePath: {
-    type: String,
-    required: false
-  },
+
   
   // OSS云存储信息
   ossKey: {
@@ -32,8 +28,15 @@ const photoSchema = new mongoose.Schema({
     required: false
   },
   
-  ossUrl: {
-    type: String,  // OSS访问URL
+  // 前端访问URL
+  frontendUrl: {
+    type: String,  // 前端可直接访问的URL
+    required: false
+  },
+  
+  // 缩略图URL
+  thumbnailUrl: {
+    type: String,  // 缩略图访问URL
     required: false
   },
   
@@ -49,11 +52,19 @@ const photoSchema = new mongoose.Schema({
   
   // 图片元数据
   width: {
-    type: Number
+    type: Number,  // 图片宽度（像素）
+    required: false
   },
   
   height: {
-    type: Number
+    type: Number,  // 图片高度（像素）
+    required: false
+  },
+  
+  // 图片宽高比
+  aspectRatio: {
+    type: String,  // 宽高比，如 "16:9", "4:3", "1:1"
+    required: false
   },
   
   // 拍摄信息
@@ -120,12 +131,7 @@ const photoSchema = new mongoose.Schema({
     maxlength: [500, "描述不能超过500个字符"]
   },
   
-  // 状态管理
-  status: {
-    type: String,
-    enum: ['draft', 'published', 'archived'],
-    default: 'draft'
-  },
+
   
   // 排序和精选
   sortOrder: {
@@ -164,7 +170,6 @@ const photoSchema = new mongoose.Schema({
 photoSchema.index({ shootSession: 1 });
 photoSchema.index({ shootDate: -1 });
 photoSchema.index({ isRetouched: 1 });
-photoSchema.index({ status: 1 });
 photoSchema.index({ tags: 1 });
 photoSchema.index({ 'settings.iso': 1 });
 
@@ -174,12 +179,14 @@ photoSchema.virtual('url').get(function() {
 });
 
 photoSchema.virtual('imageUrl').get(function() {
-  return `/uploads/photos/${this.filename}`;
+  // 优先使用OSS URL，如果没有则返回null（不应该有本地路径）
+  return this.frontendUrl || this.thumbnailUrl || null;
 });
 
 photoSchema.virtual('retouchedUrl').get(function() {
   if (this.isRetouched && this.retouchedVersion) {
-    return `/uploads/retouched/${this.retouchedVersion}`;
+    // 精修图片也应该使用OSS URL
+    return this.frontendUrl || this.thumbnailUrl || null;
   }
   return null;
 });
@@ -194,7 +201,7 @@ photoSchema.statics.findRetouched = function() {
 };
 
 photoSchema.statics.findPublished = function() {
-  return this.find({ status: 'published' }).sort({ shootDate: -1 });
+  return this.find({}).sort({ shootDate: -1 });  // 返回所有图片
 };
 
 // 实例方法

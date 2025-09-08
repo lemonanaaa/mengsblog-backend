@@ -21,7 +21,7 @@ const photoSchema = Joi.object({
   shootSession: Joi.string().hex().length(24).required(),
   tags: Joi.array().items(Joi.string()).optional(),
   description: Joi.string().max(500).optional(),
-  status: Joi.string().valid('draft', 'published', 'archived').default('draft'),
+
   sortOrder: Joi.number().default(0),
   isFeatured: Joi.boolean().default(false)
 });
@@ -38,6 +38,7 @@ const shootSessionSchema = Joi.object({
   // 选填字段
   batchName: Joi.string().max(100).optional(),
   shootLocation: Joi.string().max(200).optional(),
+  location: Joi.string().max(200).optional(),  // 支持前端字段名
   theme: Joi.string().max(100).optional(),
   description: Joi.string().max(1000).optional(),
   camera: Joi.string().optional(),
@@ -75,16 +76,9 @@ const getAllPhotos = async (req, res) => {
     // 构建查询条件
     const query = {};
     
-    // 根据isMeng参数控制返回的图片状态
-    if (isMeng === 'true') {
-      // isMeng为true时，返回所有图片
-    } else {
-      // isMeng为false或未提供时，只返回已发布的图片
-      query.status = 'published';
-    }
+    // 不再需要状态筛选，返回所有图片
     
     // 其他筛选条件
-    if (status) query.status = status;
     if (shootSession) query.shootSession = shootSession;
     if (isRetouched === 'true') query.isRetouched = true;
     if (isRetouched === 'false') query.isRetouched = false;
@@ -125,7 +119,17 @@ const getAllPhotos = async (req, res) => {
 const getPhotosByShootSession = async (req, res) => {
   try {
     const { sessionId } = req.params;
-    const { page = 1, limit = 50, isMeng } = req.query;
+    
+    // 支持GET和POST两种请求方式
+    // GET请求从query获取参数，POST请求从body获取参数
+    const params = req.method === 'POST' ? req.body : req.query;
+    
+    const { 
+      page = 1, 
+      limit = 50, 
+      isMeng,
+      types = 'all'  // 新增参数：'all' 或 'retouched' 或数组 ['all', 'retouched']
+    } = params;
     
     const skip = (page - 1) * limit;
     
@@ -138,37 +142,119 @@ const getPhotosByShootSession = async (req, res) => {
       });
     }
     
-    // 构建查询条件
-    const query = { shootSession: sessionId };
-    
-    // 根据isMeng参数控制返回的图片状态
-    if (isMeng !== 'true') {
-      query.status = 'published';
+    // 处理types参数
+    let typesArray = [];
+    if (typeof types === 'string') {
+      typesArray = [types];
+    } else if (Array.isArray(types)) {
+      typesArray = types;
+    } else {
+      typesArray = ['all'];
     }
     
-    // 执行查询
-    const photos = await Photo.find(query)
-      .populate('shootSession', 'name theme shootDate')
-      .sort([['sortOrder', 1], ['createdAt', -1]])
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    // 验证types参数
+    const validTypes = ['all', 'retouched'];
+    const invalidTypes = typesArray.filter(type => !validTypes.includes(type));
+    if (invalidTypes.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `无效的类型参数: ${invalidTypes.join(', ')}。支持的类型: ${validTypes.join(', ')}`
+      });
+    }
     
-    // 获取总数
-    const total = await Photo.countDocuments(query);
+    // 构建基础查询条件
+    const baseQuery = { shootSession: sessionId };
+    
+    // 根据types参数构建不同的查询
+    let allPhotos = [];
+    let retouchedPhotos = [];
+    
+    // 如果需要返回所有图片
+    if (typesArray.includes('all')) {
+      allPhotos = await Photo.find(baseQuery)
+        .populate('shootSession', 'name theme shootDate')
+        .sort([['sortOrder', 1], ['createdAt', -1]])
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+    }
+    
+    // 如果需要返回精修图片
+    if (typesArray.includes('retouched')) {
+      const retouchedQuery = { ...baseQuery, isRetouched: true };
+      retouchedPhotos = await Photo.find(retouchedQuery)
+        .populate('shootSession', 'name theme shootDate')
+        .sort([['retouchedAt', -1], ['sortOrder', 1], ['createdAt', -1]])
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean();
+    }
+    
+    // 获取统计信息
+    const totalAll = await Photo.countDocuments(baseQuery);
+    const totalRetouched = await Photo.countDocuments({ ...baseQuery, isRetouched: true });
+    
+    // 构建返回数据
+    const responseData = {
+      shootSession: {
+        id: shootSession._id,
+        name: shootSession.name,
+        theme: shootSession.theme,
+        shootDate: shootSession.shootDate,
+        friendName: shootSession.friendName,
+        friendFullName: shootSession.friendFullName,
+        phoneTail: shootSession.phoneTail,
+        shootLocation: shootSession.shootLocation || '',  // 数据库字段名
+        location: shootSession.shootLocation || '',       // 前端期望的字段名
+        description: shootSession.description,
+        totalPhotos: shootSession.totalPhotos,
+        retouchedPhotos: shootSession.retouchedPhotos,
+        publishedPhotos: shootSession.publishedPhotos,
+        isPublic: shootSession.isPublic,
+        tags: shootSession.tags,
+        isFeatured: shootSession.isFeatured,
+        sortOrder: shootSession.sortOrder,
+        author: shootSession.author,
+        createdAt: shootSession.createdAt,
+        updatedAt: shootSession.updatedAt
+      }
+    };
+    
+    // 根据请求的类型添加相应的数据
+    if (typesArray.includes('all')) {
+      responseData.photos = allPhotos;
+      responseData.pagination = {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: totalAll,
+        pages: Math.ceil(totalAll / limit)
+      };
+    }
+    
+    if (typesArray.includes('retouched')) {
+      responseData.retouchedPhotos = retouchedPhotos;
+      if (!responseData.pagination) {
+        responseData.pagination = {
+          page: parseInt(page),
+          limit: parseInt(limit),
+          total: totalRetouched,
+          pages: Math.ceil(totalRetouched / limit)
+        };
+      }
+    }
+    
+    // 如果同时请求了两种类型，添加统计信息
+    if (typesArray.length > 1) {
+      responseData.stats = {
+        totalPhotos: totalAll,
+        retouchedPhotos: totalRetouched,
+        normalPhotos: totalAll - totalRetouched
+      };
+    }
     
     res.json({
       success: true,
-      data: {
-        shootSession,
-        photos
-      },
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        total,
-        pages: Math.ceil(total / limit)
-      }
+      data: responseData
     });
   } catch (error) {
     console.error('获取拍摄批次图片失败:', error);
@@ -190,10 +276,7 @@ const getRetouchedPhotos = async (req, res) => {
     // 构建查询条件
     const query = { isRetouched: true };
     
-    // 根据isMeng参数控制返回的图片状态
-    if (isMeng !== 'true') {
-      query.status = 'published';
-    }
+    // 不再需要状态筛选，返回所有图片
     
     // 执行查询
     const photos = await Photo.find(query)
@@ -267,24 +350,9 @@ const uploadImages = async (req, res) => {
       if (fileInfo.isRetouched || imageType === 'retouched') {
         // 处理精修图片
         const retouchedData = {
-          filename: fileInfo.filename,
-          originalName: fileInfo.originalName,
-          filePath: fileInfo.filePath,
-          fileSize: fileInfo.fileSize,
-          mimeType: fileInfo.mimeType,
-          isRetouched: true,
-          retouchedVersion: fileInfo.filename,
-          retouchedAt: new Date()
-        };
-        
-        uploadedRetouched.push(retouchedData);
-      } else {
-        // 处理普通图片
-        const photoData = {
           title: fileInfo.originalName.replace(/\.[^/.]+$/, ""), // 去掉文件扩展名作为标题
           filename: fileInfo.filename,
           originalName: fileInfo.originalName,
-          filePath: fileInfo.filePath, // 保留本地路径作为备份
           fileSize: fileInfo.fileSize,
           mimeType: fileInfo.mimeType,
           shootDate: shootDate || new Date(),
@@ -295,13 +363,72 @@ const uploadImages = async (req, res) => {
           shootSession: shootSession,
           tags: tags ? JSON.parse(tags) : [],
           description: description || '',
-          status: 'draft'
+          isRetouched: true,
+          retouchedVersion: fileInfo.filename,
+          retouchedAt: new Date()
+        };
+        
+        // 如果OSS上传成功，添加OSS信息
+        if (fileInfo.uploadedToOSS) {
+          retouchedData.ossKey = fileInfo.ossKey;
+          retouchedData.frontendUrl = fileInfo.frontendUrl; // 前端访问URL
+          retouchedData.thumbnailUrl = fileInfo.thumbnailUrl; // 缩略图URL
+          console.log(`✅ 精修图片保存成功，OSS信息已添加: ${fileInfo.originalName}`);
+        } else {
+          console.log(`⚠️ 精修图片保存成功，但OSS信息缺失: ${fileInfo.originalName}`);
+          if (fileInfo.ossError) {
+            console.error(`OSS错误详情: ${fileInfo.ossError}`);
+          }
+        }
+        
+        // 添加图片尺寸信息
+        if (fileInfo.width && fileInfo.height) {
+          retouchedData.width = fileInfo.width;
+          retouchedData.height = fileInfo.height;
+          retouchedData.aspectRatio = fileInfo.aspectRatio;
+        }
+        
+        // 创建Photo记录并保存到数据库
+        const retouchedPhoto = new Photo(retouchedData);
+        await retouchedPhoto.save();
+        
+        uploadedRetouched.push(retouchedPhoto);
+      } else {
+        // 处理普通图片
+        const photoData = {
+          title: fileInfo.originalName.replace(/\.[^/.]+$/, ""), // 去掉文件扩展名作为标题
+          filename: fileInfo.filename,
+          originalName: fileInfo.originalName,
+          fileSize: fileInfo.fileSize,
+          mimeType: fileInfo.mimeType,
+          shootDate: shootDate || new Date(),
+          shootLocation: shootLocation || '',
+          camera: camera || '',
+          lens: lens || '',
+          settings: settings ? JSON.parse(settings) : {},
+          shootSession: shootSession,
+          tags: tags ? JSON.parse(tags) : [],
+          description: description || ''
         };
         
         // 如果OSS上传成功，添加OSS信息
         if (fileInfo.uploadedToOSS) {
           photoData.ossKey = fileInfo.ossKey;
-          photoData.ossUrl = fileInfo.ossUrl;
+          photoData.frontendUrl = fileInfo.frontendUrl; // 前端访问URL
+          photoData.thumbnailUrl = fileInfo.thumbnailUrl; // 缩略图URL
+          console.log(`✅ 图片保存成功，OSS信息已添加: ${fileInfo.originalName}`);
+        } else {
+          console.log(`⚠️ 图片保存成功，但OSS信息缺失: ${fileInfo.originalName}`);
+          if (fileInfo.ossError) {
+            console.error(`OSS错误详情: ${fileInfo.ossError}`);
+          }
+        }
+        
+        // 添加图片尺寸信息
+        if (fileInfo.width && fileInfo.height) {
+          photoData.width = fileInfo.width;
+          photoData.height = fileInfo.height;
+          photoData.aspectRatio = fileInfo.aspectRatio;
         }
         
         const photo = new Photo(photoData);
@@ -354,12 +481,14 @@ const createShootSession = async (req, res) => {
     const mappedData = {
       ...value,
       shootDate: value.date,           // date -> shootDate
-      name: value.batchName            // batchName -> name
+      name: value.batchName,           // batchName -> name
+      shootLocation: value.location || value.shootLocation  // location -> shootLocation
     };
     
     // 删除映射前的字段
     delete mappedData.date;
     delete mappedData.batchName;
+    delete mappedData.location;
     
     const shootSession = new ShootSession(mappedData);
     await shootSession.save();
@@ -546,12 +675,14 @@ const updateShootSession = async (req, res) => {
     const mappedData = {
       ...value,
       shootDate: value.date,           // date -> shootDate
-      name: value.batchName            // batchName -> name
+      name: value.batchName,           // batchName -> name
+      shootLocation: value.location || value.shootLocation  // location -> shootLocation
     };
     
     // 删除映射前的字段
     delete mappedData.date;
     delete mappedData.batchName;
+    delete mappedData.location;
     
     const shootSession = await ShootSession.findById(id);
     if (!shootSession) {
@@ -794,12 +925,25 @@ const deletePhotos = async (req, res) => {
   try {
     const { photoIds } = req.body;
     
+    // 验证请求参数
     if (!photoIds || !Array.isArray(photoIds) || photoIds.length === 0) {
       return res.status(400).json({
         success: false,
-        message: '请提供要删除的图片ID数组'
+        message: '请提供要删除的图片ID数组',
+        example: {
+          photoIds: ['68b8410984d1475313b14ad9', '68b8410984d1475313b14ad7']
+        }
       });
     }
+    
+    
+    // 记录删除日志
+    console.log(`🗑️ 批量删除图片请求:`, {
+      photoIds,
+      count: photoIds.length,
+      timestamp: new Date().toISOString(),
+      ip: req.ip
+    });
     
     // 查找要删除的图片
     const photos = await Photo.find({ _id: { $in: photoIds } });
@@ -807,65 +951,114 @@ const deletePhotos = async (req, res) => {
     if (photos.length === 0) {
       return res.status(404).json({
         success: false,
-        message: '没有找到要删除的图片'
+        message: '没有找到要删除的图片',
+        requestedIds: photoIds
       });
     }
     
     const deletedPhotos = [];
     const failedDeletions = [];
+    const shootSessionsToUpdate = new Set();
     
     // 逐个删除图片
     for (const photo of photos) {
       try {
-        // 删除文件
+        console.log(`🔄 正在删除图片: ${photo.title} (${photo._id})`);
+        
+        // 删除本地文件
         try {
           if (photo.filePath) {
             await fs.unlink(photo.filePath);
+            console.log(`✅ 本地文件删除成功: ${photo.filePath}`);
           }
           if (photo.retouchedVersion) {
             const retouchedPath = path.join(process.env.UPLOAD_PATH || './uploads', 'retouched', photo.retouchedVersion);
             await fs.unlink(retouchedPath);
+            console.log(`✅ 精修文件删除成功: ${retouchedPath}`);
           }
         } catch (fileError) {
-          console.warn(`删除文件失败 ${photo._id}:`, fileError);
+          console.warn(`⚠️ 删除文件失败 ${photo._id}:`, fileError.message);
+        }
+        
+        // 删除OSS文件
+        try {
+          if (photo.ossKey) {
+            await deleteFromOSS(photo.ossKey);
+            console.log(`✅ OSS文件删除成功: ${photo.ossKey}`);
+          }
+        } catch (ossError) {
+          console.warn(`⚠️ 删除OSS文件失败 ${photo._id}:`, ossError.message);
         }
         
         // 删除数据库记录
         await Photo.findByIdAndDelete(photo._id);
-        deletedPhotos.push(photo._id);
         
-        // 更新拍摄批次的图片数量
+        deletedPhotos.push({
+          id: photo._id,
+          title: photo.title,
+          filename: photo.filename,
+          originalName: photo.originalName
+        });
+        
+        // 收集需要更新的拍摄批次
         if (photo.shootSession) {
-          const shootSession = await ShootSession.findById(photo.shootSession);
-          if (shootSession) {
-            await shootSession.updatePhotoCounts();
-          }
+          shootSessionsToUpdate.add(photo.shootSession.toString());
         }
+        
+        console.log(`✅ 图片删除成功: ${photo.title}`);
+        
       } catch (error) {
-        console.error(`删除图片 ${photo._id} 失败:`, error);
+        console.error(`❌ 删除图片 ${photo._id} 失败:`, error);
         failedDeletions.push({
           id: photo._id,
+          title: photo.title || '未知',
           error: error.message
         });
       }
     }
     
-    res.json({
-      success: true,
-      message: `成功删除 ${deletedPhotos.length} 张图片`,
-      data: {
-        deletedCount: deletedPhotos.length,
-        failedCount: failedDeletions.length,
-        deletedIds: deletedPhotos,
-        failedDeletions: failedDeletions
+    // 批量更新拍摄批次的图片数量
+    for (const sessionId of shootSessionsToUpdate) {
+      try {
+        const shootSession = await ShootSession.findById(sessionId);
+        if (shootSession) {
+          await shootSession.updatePhotoCounts();
+          console.log(`✅ 拍摄批次统计更新成功: ${sessionId}`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ 更新拍摄批次统计失败 ${sessionId}:`, error.message);
       }
-    });
+    }
+    
+    // 返回详细结果
+    const result = {
+      success: true,
+      message: `批量删除完成：成功 ${deletedPhotos.length} 张，失败 ${failedDeletions.length} 张`,
+      data: {
+        summary: {
+          totalRequested: photoIds.length,
+          totalFound: photos.length,
+          deletedCount: deletedPhotos.length,
+          failedCount: failedDeletions.length,
+          successRate: `${Math.round((deletedPhotos.length / photos.length) * 100)}%`
+        },
+        deletedPhotos: deletedPhotos,
+        failedDeletions: failedDeletions,
+        updatedSessions: Array.from(shootSessionsToUpdate)
+      }
+    };
+    
+    console.log(`📊 批量删除结果:`, result.data.summary);
+    
+    res.json(result);
+    
   } catch (error) {
-    console.error('批量删除图片失败:', error);
+    console.error('❌ 批量删除图片失败:', error);
     res.status(500).json({
       success: false,
       message: '批量删除图片失败',
-      error: error.message
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 };
@@ -881,8 +1074,17 @@ const getShootSessionsOverview = async (req, res) => {
       friendName,
       friendFullName,
       phoneTail,
-      isPublic
+      isPublic,
+      retouchedOnly = false  // 新增参数：是否只返回精修照片
     } = req.query;
+    
+    // 调试日志：检查参数
+    console.log('🔍 Overview接口参数:', {
+      retouchedOnly,
+      retouchedOnlyType: typeof retouchedOnly,
+      retouchedOnlyValue: retouchedOnly,
+      allQueryParams: req.query
+    });
     
     const skip = (page - 1) * limit;
     
@@ -907,26 +1109,103 @@ const getShootSessionsOverview = async (req, res) => {
     if (isPublic !== undefined) query.isPublic = isPublic === 'true';
     
     // 执行查询
-    const shootSessions = await ShootSession.find(query)
+    let shootSessions = await ShootSession.find(query)
       .sort([['shootDate', -1], ['sortOrder', 1]])
       .skip(skip)
       .limit(parseInt(limit))
       .lean();
     
+    // 如果只返回精修照片，过滤掉没有精修图片的批次
+    if (retouchedOnly === 'true') {
+      const sessionsWithRetouched = [];
+      
+      for (const session of shootSessions) {
+        // 检查该批次是否有精修照片
+        const retouchedCount = await Photo.countDocuments({ 
+          shootSession: session._id, 
+          isRetouched: true 
+        });
+        
+        if (retouchedCount > 0) {
+          sessionsWithRetouched.push(session);
+        }
+      }
+      
+      shootSessions = sessionsWithRetouched;
+    }
+    
     // 为每个批次添加代表性照片和统计信息
     const sessionsWithPhotos = await Promise.all(
       shootSessions.map(async (session) => {
-        // 获取该批次的一张代表性照片（优先选择精选或精修的）
-        const representativePhoto = await Photo.findOne({ 
-          shootSession: session._id 
-        })
-        .sort({ 
-          isFeatured: -1,    // 精选图片优先
-          isRetouched: -1,   // 精修图片其次
-          createdAt: -1      // 最后按创建时间
-        })
-        .select('filename title shootDate isRetouched isFeatured')
-        .lean();
+        let representativePhoto = null;
+        let retouchedPhoto = null;
+        let photos = [];
+        
+        if (retouchedOnly === 'true') {
+          // 如果只返回精修照片，获取前8张精修照片
+          const retouchedPhotos = await Photo.find({ 
+            shootSession: session._id,
+            isRetouched: true
+          })
+          .sort({ 
+            isFeatured: -1,    // 精选的精修图片优先
+            retouchedAt: -1,   // 按精修时间倒序
+            createdAt: -1      // 最后按创建时间
+          })
+          .limit(8)  // 限制为前8张
+          .select('filename title shootDate isRetouched isFeatured frontendUrl thumbnailUrl ossKey retouchedAt')
+          .lean();
+          
+          // 调试日志
+          console.log(`🔍 批次 ${session._id} 精修照片查询结果:`, {
+            sessionId: session._id,
+            batchName: session.name,
+            foundCount: retouchedPhotos.length,
+            photos: retouchedPhotos.map(p => ({
+              id: p._id,
+              title: p.title,
+              isRetouched: p.isRetouched,
+              isFeatured: p.isFeatured,
+              retouchedAt: p.retouchedAt
+            }))
+          });
+          
+          // 将前8张精修照片作为retouchedPhoto数组
+          retouchedPhoto = retouchedPhotos;
+          
+          // 如果有精修照片，第一张作为代表性照片
+          if (retouchedPhotos.length > 0) {
+            representativePhoto = retouchedPhotos[0];
+          }
+        } else {
+          // 原有逻辑：获取该批次的一张代表性照片（优先选择精选或精修的）
+          representativePhoto = await Photo.findOne({ 
+            shootSession: session._id 
+          })
+          .sort({ 
+            isFeatured: -1,    // 精选图片优先
+            isRetouched: -1,   // 精修图片其次
+            createdAt: -1      // 最后按创建时间
+          })
+          .select('filename title shootDate isRetouched isFeatured frontendUrl thumbnailUrl ossKey')
+          .lean();
+          
+          // 获取该批次的一张精修图片（优先选择精选的精修图片）
+          const singleRetouchedPhoto = await Photo.findOne({ 
+            shootSession: session._id,
+            isRetouched: true  // 只选择精修图片
+          })
+          .sort({ 
+            isFeatured: -1,    // 精选的精修图片优先
+            retouchedAt: -1,   // 按精修时间倒序
+            createdAt: -1      // 最后按创建时间
+          })
+          .select('filename title shootDate isRetouched isFeatured frontendUrl thumbnailUrl ossKey retouchedAt')
+          .lean();
+          
+          // 将单张精修照片包装成数组，保持数据结构一致
+          retouchedPhoto = singleRetouchedPhoto ? [singleRetouchedPhoto] : [];
+        }
         
         // 获取该批次的统计信息
         const photoStats = await Photo.aggregate([
@@ -936,7 +1215,7 @@ const getShootSessionsOverview = async (req, res) => {
               _id: null,
               totalPhotos: { $sum: 1 },
               publishedPhotos: { 
-                $sum: { $cond: [{ $eq: ['$status', 'published'] }, 1, 0] } 
+                $sum: 1  // 所有图片都算作已发布
               },
               retouchedPhotos: { 
                 $sum: { $cond: [{ $eq: ['$isRetouched', true] }, 1, 0] } 
@@ -981,7 +1260,7 @@ const getShootSessionsOverview = async (req, res) => {
           batchName: session.name,
           location: session.shootLocation,
           
-          // 添加照片信息
+          // 添加照片信息（普通照片）
           photos: [],
           
           representativePhoto: representativePhoto ? {
@@ -990,8 +1269,23 @@ const getShootSessionsOverview = async (req, res) => {
             shootDate: representativePhoto.shootDate,
             isRetouched: representativePhoto.isRetouched,
             isFeatured: representativePhoto.isFeatured,
-            imageUrl: `/uploads/photos/${representativePhoto.filename}`
+            // 使用OSS URL（正常情况下应该都有OSS URL）
+            imageUrl: representativePhoto.frontendUrl || representativePhoto.thumbnailUrl,
+            // 缩略图URL
+            thumbnailUrl: representativePhoto.thumbnailUrl || representativePhoto.frontendUrl
           } : null,
+          
+          // 添加精修图片字段（始终为数组格式）
+          retouchedPhoto: retouchedPhoto && retouchedPhoto.length > 0 ? retouchedPhoto.map(photo => ({
+            filename: photo.filename,
+            title: photo.title,
+            shootDate: photo.shootDate,
+            isRetouched: photo.isRetouched,
+            isFeatured: photo.isFeatured,
+            retouchedAt: photo.retouchedAt,
+            imageUrl: photo.frontendUrl || photo.thumbnailUrl,
+            thumbnailUrl: photo.thumbnailUrl || photo.frontendUrl
+          })) : [],
           photoStats: stats
         };
       })

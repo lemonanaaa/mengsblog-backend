@@ -193,8 +193,7 @@ shootSessionSchema.methods.updatePhotoCounts = async function() {
     isRetouched: true 
   });
   this.publishedPhotos = await Photo.countDocuments({ 
-    shootSession: this._id, 
-    status: 'published' 
+    shootSession: this._id
   });
   
   return this.save();
