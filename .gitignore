@@ -122,3 +122,15 @@ tmp/
 temp/
 .tmp/
 .temp/
+
+# 部署相关文件（包含敏感信息）
+deploy.env
+*.env
+.env.*
+!env.example
+!deploy.env.example
+
+# 备份文件
+*.backup
+*.bak
+mongodb-backup/
