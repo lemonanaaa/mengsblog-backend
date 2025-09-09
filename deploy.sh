@@ -25,8 +25,12 @@ echo "📥 拉取最新代码..."
 git pull origin master
 
 # 2. 安装/更新依赖
-echo "📦 安装依赖..."
-npm ci --production
+if git pull origin master | grep -q "Already up to date"; then
+    echo "✅ 代码已是最新，跳过依赖安装"
+else
+    echo "�� 代码已更新，安装依赖..."
+    npm ci --production
+fi
 
 # 3. 创建必要目录
 echo "📁 创建必要目录..."
